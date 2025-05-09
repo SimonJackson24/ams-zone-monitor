@@ -20,30 +20,49 @@ A Raspberry Pi 5 application that monitors camera feeds for human presence in pr
 
 ## Installation
 
-1. Clone this repository to your Raspberry Pi
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Configure the application:
-   ```
-   cp config/config.example.json config/config.json
-   ```
-   Edit `config.json` with your specific settings.
+### 1. Clone this repository to your Raspberry Pi
+```bash
+git clone https://github.com/SimonJackson24/ams-zone-monitor.git
+cd ams-zone-monitor
+```
 
-4. Start the application:
-   ```
-   python app.py
-   ```
+### 2. Install Hailo SDK and dependencies
+```bash
+# Install Hailo SDK first
+cd hailo_setup
+chmod +x install_hailo.sh
+./install_hailo.sh
+cd ..
 
-5. To run as a service:
-   ```
-   sudo cp systemd/ams-zone-monitor.service /etc/systemd/system/
-   sudo systemctl enable ams-zone-monitor
-   sudo systemctl start ams-zone-monitor
-   ```
+# Install Python dependencies
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-6. Access the web interface at `http://<raspberry-pi-ip>:5000`
+### 3. Configure the application
+```bash
+cp config/config.example.json config/config.json
+```
+Edit `config.json` with your specific settings (camera streams, GPIO pins, etc).
+
+### 4. Start the application
+```bash
+python app.py
+```
+
+### 5. Run as a service (optional)
+```bash
+sudo cp systemd/ams-zone-monitor.service /etc/systemd/system/
+sudo systemctl enable ams-zone-monitor
+sudo systemctl start ams-zone-monitor
+```
+
+### 6. Access the web interface
+Open a browser and navigate to:
+```
+http://<raspberry-pi-ip>:7800
+```
 
 ## Configuration
 

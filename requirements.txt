@@ -1,22 +1,23 @@
 # Web server and UI
-flask==2.3.3
-flask-socketio==5.3.4
-gevent==23.9.1
-gevent-websocket==0.10.1
+flask>=2.0.0
+flask-socketio>=5.0.0
+gevent>=21.0.0
+gevent-websocket>=0.10.1
 
 # Video processing
-opencv-python==4.8.0.76
-numpy==1.25.2
-python-rtsp-client==0.3.0
-pillow==10.0.0
-
-# Hailo SDK
-hailo-ai==3.27.0
+opencv-python
+numpy
+av>=8.0.0
+pillow
 
 # GPIO control
-RPi.GPIO==0.7.1
+RPi.GPIO
 
 # Utility packages
-pyyaml==6.0.1
-python-dotenv==1.0.0
-requests==2.31.0
+pyyaml
+python-dotenv
+requests
+
+# Socket.IO client
+python-socketio>=5.0.0
+eventlet
