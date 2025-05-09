@@ -1,0 +1,14 @@
+[Unit]
+Description=AMS Zone Monitor Service
+After=network.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/ams-zone-monitor
+ExecStart=/usr/bin/python3 app.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

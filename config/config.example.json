@@ -1,0 +1,35 @@
+{
+    "cameras": [
+        {
+            "id": "camera_1",
+            "name": "Main Camera",
+            "rtsp_url": "rtsp://admin:password@192.168.1.100:554/stream",
+            "fps": 10
+        }
+    ],
+    "zones": {
+        "zone_1": {
+            "name": "Safety Zone 1",
+            "camera_id": "camera_1",
+            "coordinates": [
+                [100, 100],
+                [300, 100],
+                [300, 300],
+                [100, 300]
+            ]
+        }
+    },
+    "gpio": {
+        "output_pin": 17,
+        "active_high": true,
+        "activation_delay": 0.5
+    },
+    "hailo": {
+        "model_path": "/opt/hailo/models/yolov5s_persondetection.hef",
+        "confidence_threshold": 0.5
+    },
+    "web": {
+        "port": 5000,
+        "debug": false
+    }
+}
