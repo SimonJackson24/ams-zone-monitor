@@ -51,6 +51,14 @@ build/
 # Environment variables
 .env
 
+# Hailo SDK and related files
+hailo_setup/*.zip
+hailo_setup/*.tar.gz
+hailo_setup/hailo_ai_sw_suite*/
+hailo/
+*.hef
+.env
+
 # OS specific files
 .DS_Store
 Thumbs.db
