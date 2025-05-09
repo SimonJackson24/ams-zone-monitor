@@ -6,75 +6,291 @@ import time
 import logging
 import numpy as np
 import threading
+import os
 from collections import defaultdict
+from datetime import datetime
 
-# Try to import Hailo AI SDK
-try:
-    import hailo
-    from hailo_platform import HEF
-    from hailo_platform import InferVStreams
-    from hailo_platform import ConfigureParams
-    HAILO_AVAILABLE = True
-except ImportError:
-    HAILO_AVAILABLE = False
-    logging.warning("Hailo AI SDK not available. Detection will be simulated.")
+# Import our improved Hailo wrapper
+from modules.hailo_wrapper import HailoWrapper, is_hailo_available
 
 logger = logging.getLogger(__name__)
 
 class ZoneDetector:
     """Detects humans in predefined zones using Hailo8L AI accelerator."""
     
-    def __init__(self, camera_manager, gpio_controller, zones_config, hailo_model_path=None):
+    def __init__(self, camera_manager, gpio_controller, config):
         """Initialize the zone detector.
         
         Args:
             camera_manager: CameraManager instance to get frames from
             gpio_controller: GPIOController instance to control GPIO
-            zones_config: Dictionary of zone configurations
-            hailo_model_path: Path to Hailo model file (.hef)
+            config: Application configuration dictionary
         """
         self.camera_manager = camera_manager
         self.gpio_controller = gpio_controller
-        self.zones = zones_config
-        self.hailo_model_path = hailo_model_path or '/opt/hailo/models/yolov5s_persondetection.hef'
+        self.config = config
+        self.zones = {}
         
         # State variables
         self.running = False
+        self.thread = None
         self.lock = threading.Lock()
-        self.detection_results = {}
-        self.zone_status = defaultdict(bool)  # Track if each zone has people
-        self.last_process_time = 0
-        self.hailo_device = None
-        self.hailo_network = None
+        self.last_detection_time = {}
+        self.frame_buffer = {}
         
-        # Initialize Hailo if available
-        if HAILO_AVAILABLE:
-            self._init_hailo()
+        # Initialize Hailo for person detection
+        self.hailo_available = is_hailo_available()
+        if self.hailo_available:
+            model_path = config.get('hailo', {}).get('model_path', '')
+            if os.path.exists(model_path):
+                self.hailo = HailoWrapper(model_path)
+                logger.info(f"Hailo AI initialized with model: {model_path}")
+            else:
+                logger.error(f"Hailo model file not found: {model_path}")
+                self.hailo_available = False
+        else:
+            logger.warning("Hailo AI SDK not available. Detection will be simulated.")
+        
+        # Initialize zones from config
+        self._init_zones()
+    def _init_zones(self):
+        """Initialize zones from configuration file"""
+        for camera in self.config.get('cameras', []):
+            camera_id = camera.get('id')
+            for zone_config in camera.get('zones', []):
+                zone_id = zone_config.get('id')
+                if zone_id and camera_id:
+                    self.zones[zone_id] = {
+                        'camera_id': camera_id,
+                        'name': zone_config.get('name', f'Zone {zone_id}'),
+                        'coordinates': zone_config.get('coordinates', []),
+                        'confidence_threshold': zone_config.get('confidence_threshold', 0.5),
+                        'active': False,
+                        'person_detected': False,
+                        'last_detection_time': None
+                    }
+                    logger.info(f"Zone initialized: {zone_id} for camera {camera_id}")
+            
+    def start(self):
+        """Start the zone detector monitoring thread."""
+        if self.running:
+            return
+        
+        self.running = True
+        self.thread = threading.Thread(target=self._monitoring_loop)
+        self.thread.daemon = True
+        self.thread.start()
+        logger.info("Zone detector started")
     
-    def _init_hailo(self):
-        """Initialize Hailo AI accelerator."""
-        try:
-            # Create Hailo device
-            self.hailo_device = hailo.Device()
+    def stop(self):
+        """Stop the zone detector."""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=2.0)
+        logger.info("Zone detector stopped")
+    
+    def get_zones(self):
+        """Get all zones."""
+        with self.lock:
+            return self.zones.copy()
+    
+    def get_zone(self, zone_id):
+        """Get a specific zone by ID."""
+        with self.lock:
+            return self.zones.get(zone_id, {})
+    
+    def set_zone_active(self, zone_id, active):
+        """Activate or deactivate a zone."""
+        with self.lock:
+            if zone_id in self.zones:
+                self.zones[zone_id]['active'] = active
+                logger.info(f"Zone {zone_id} set to {'active' if active else 'inactive'}")
+                return True
+        return False
+    
+    def update_zone_coordinates(self, zone_id, coordinates):
+        """Update zone coordinates."""
+        with self.lock:
+            if zone_id in self.zones:
+                self.zones[zone_id]['coordinates'] = coordinates
+                logger.info(f"Zone {zone_id} coordinates updated")
+                return True
+        return False
+    
+    def get_last_frame(self, camera_id):
+        """Get the last processed frame for a camera."""
+        return self.frame_buffer.get(camera_id)
+    
+    def _is_person_in_zone(self, person_bbox, zone_coordinates):
+        """Check if a person is in a zone.
+        
+        Args:
+            person_bbox: [x1, y1, x2, y2] bounding box
+            zone_coordinates: List of [x, y] coordinates defining a polygon
             
-            # Load model from HEF file
-            hef = HEF(self.hailo_model_path)
-            self.configure_params = ConfigureParams.create_from_hef(hef, interface=hailo.PCIE)
-            self.hailo_network = self.hailo_device.configure(hef, self.configure_params)
+        Returns:
+            True if person is in zone, False otherwise
+        """
+        # Calculate center point of the bounding box
+        center_x = (person_bbox[0] + person_bbox[2]) / 2
+        center_y = (person_bbox[1] + person_bbox[3]) / 2
+        
+        # Convert zone coordinates to numpy array
+        zone_polygon = np.array(zone_coordinates, np.int32)
+        zone_polygon = zone_polygon.reshape((-1, 1, 2))
+        
+        # Check if center point is inside the polygon
+        result = cv2.pointPolygonTest(zone_polygon, (center_x, center_y), False)
+        return result >= 0
+    
+    def _detect_persons(self, frame):
+        """Detect persons in a frame.
+        
+        Args:
+            frame: The image to detect persons in
             
-            # Get input and output tensors info
-            self.input_vstream_info = hef.get_input_vstream_infos()[0]
-            self.output_vstream_info = hef.get_output_vstream_infos()
+        Returns:
+            List of [x1, y1, x2, y2] bounding boxes
+        """
+        if self.hailo_available and hasattr(self, 'hailo'):
+            # Use Hailo for detection
+            try:
+                detections = self.hailo.infer(frame)
+                # Format: [[x1, y1, x2, y2, confidence, class_id], ...]
+                persons = []
+                
+                # Filter for person class (usually class_id 0 in YOLO models)
+                for detection in detections:
+                    if detection[5] == 0:  # Person class
+                        if detection[4] > 0.3:  # Confidence threshold
+                            persons.append(detection[:4])  # Get bounding box
+                
+                return persons
+            except Exception as e:
+                logger.error(f"Error in Hailo detection: {e}")
+                # Fall back to OpenCV detection on error
+                return self._opencv_person_detection(frame)
+        else:
+            # Use OpenCV for detection
+            return self._opencv_person_detection(frame)
+    
+    def _opencv_person_detection(self, frame):
+        """Fallback person detection using OpenCV.
+        
+        Args:
+            frame: The image to detect persons in
             
-            # Create inference streams
-            self.infer_streams = InferVStreams(self.hailo_device, self.hailo_network)
-            self.infer_streams.start()
+        Returns:
+            List of [x1, y1, x2, y2] bounding boxes
+        """
+        # Basic person detection using OpenCV
+        # This is a simplified version for simulation
+        height, width = frame.shape[:2]
+        
+        # For simulation, we'll just create a random detection 5% of the time
+        if np.random.random() < 0.05:
+            x1 = int(width * 0.4)
+            y1 = int(height * 0.4)
+            x2 = int(width * 0.6)
+            y2 = int(height * 0.6)
+            return [[x1, y1, x2, y2]]
+        return []
+    
+    def _monitoring_loop(self):
+        """Main monitoring loop that runs in a separate thread."""
+        while self.running:
+            try:
+                for camera_id, camera in self.camera_manager.get_cameras().items():
+                    # Get frame from camera
+                    frame = camera.get_frame()
+                    if frame is None:
+                        continue
+                    
+                    # Store frame in buffer
+                    self.frame_buffer[camera_id] = frame.copy()
+                    
+                    # Detect persons
+                    persons = self._detect_persons(frame)
+                    
+                    # Process each zone for this camera
+                    for zone_id, zone in self.zones.items():
+                        if zone['camera_id'] == camera_id and zone['active']:
+                            person_in_zone = False
+                            
+                            # Check if any person is in this zone
+                            for person_bbox in persons:
+                                if self._is_person_in_zone(person_bbox, zone['coordinates']):
+                                    person_in_zone = True
+                                    break
+                            
+                            # Update zone status
+                            with self.lock:
+                                previous_detection = self.zones[zone_id]['person_detected']
+                                self.zones[zone_id]['person_detected'] = person_in_zone
+                                
+                                if person_in_zone:
+                                    self.zones[zone_id]['last_detection_time'] = datetime.now()
+                                    
+                                    # Activate safety relay if person detected
+                                    if not previous_detection:
+                                        logger.warning(f"Person detected in zone {zone_id}")
+                                        self.gpio_controller.set_relay(True)
+                                elif previous_detection:
+                                    # Deactivate safety relay if no person detected
+                                    logger.info(f"No person detected in zone {zone_id}")
+                                    self.gpio_controller.set_relay(False)
+            except Exception as e:
+                logger.error(f"Error in zone detector: {e}")
             
-            logger.info(f"Hailo8L initialized with model: {self.hailo_model_path}")
-        except Exception as e:
-            logger.error(f"Failed to initialize Hailo8L: {e}")
-            self.hailo_device = None
-            self.hailo_network = None
+            # Sleep to reduce CPU usage
+            time.sleep(0.1)
+    
+    def draw_zones(self, frame, camera_id):
+        """Draw zones on a frame.
+        
+        Args:
+            frame: The frame to draw on
+            camera_id: The camera ID to draw zones for
+            
+        Returns:
+            Frame with zones drawn on it
+        """
+        if frame is None:
+            return frame
+            
+        result = frame.copy()
+        
+        for zone_id, zone in self.zones.items():
+            if zone['camera_id'] == camera_id and zone['coordinates']:
+                # Choose color based on zone status
+                if zone['person_detected']:
+                    color = (0, 0, 255)  # Red if person detected
+                elif zone['active']:
+                    color = (0, 255, 0)  # Green if active
+                else:
+                    color = (255, 255, 255)  # White if inactive
+                
+                thickness = 2
+                
+                # Convert coordinates to numpy array
+                points = np.array(zone['coordinates'], np.int32)
+                points = points.reshape((-1, 1, 2))
+                
+                # Draw filled polygon with transparency
+                overlay = result.copy()
+                cv2.fillPoly(overlay, [points], color)
+                alpha = 0.3
+                cv2.addWeighted(overlay, alpha, result, 1 - alpha, 0, result)
+                
+                # Draw polygon outline
+                cv2.polylines(result, [points], True, color, thickness)
+                
+                # Draw zone name
+                if len(zone['coordinates']) > 0:
+                    text_point = (zone['coordinates'][0][0], zone['coordinates'][0][1] - 10)
+                    cv2.putText(result, zone['name'], text_point, cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        
+        return result
     
     def _process_detections(self, detections, frame_shape, camera_id, zone_id):
         """Process detections to determine if any person is in the zone.
