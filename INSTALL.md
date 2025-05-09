@@ -87,7 +87,7 @@ python app.py
 Once the application is running, you can access the web interface by opening a browser and navigating to:
 
 ```
-http://<raspberry-pi-ip>:5000
+http://<raspberry-pi-ip>:7800
 ```
 
 Replace `<raspberry-pi-ip>` with the actual IP address of your Raspberry Pi.

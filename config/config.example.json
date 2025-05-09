@@ -29,7 +29,7 @@
         "confidence_threshold": 0.5
     },
     "web": {
-        "port": 5000,
+        "port": 7800,
         "debug": false
     }
 }

@@ -144,7 +144,7 @@ def main():
     
     # Start the web server
     logger.info("Starting AMS Zone Monitor")
-    socketio.run(app, host='0.0.0.0', port=5000)
+    socketio.run(app, host='0.0.0.0', port=config.get('web', {}).get('port', 7800))
 
 if __name__ == '__main__':
     main()
